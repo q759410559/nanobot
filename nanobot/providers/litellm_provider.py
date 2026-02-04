@@ -3,6 +3,7 @@
 import os
 from typing import Any
 
+import openai
 import litellm
 from litellm import acompletion
 
@@ -18,31 +19,40 @@ class LiteLLMProvider(LLMProvider):
     """
     
     def __init__(
-        self, 
-        api_key: str | None = None, 
+        self,
+        api_key: str | None = None,
         api_base: str | None = None,
         default_model: str = "anthropic/claude-opus-4-5"
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
-        
+
         # Detect OpenRouter by api_key prefix or explicit api_base
         self.is_openrouter = (
             (api_key and api_key.startswith("sk-or-")) or
             (api_base and "openrouter" in api_base)
         )
-        
-        # Track if using custom endpoint (vLLM, etc.)
-        self.is_vllm = bool(api_base) and not self.is_openrouter
-        
+
+        # Detect Longcat by api_base
+        self.is_longcat = bool(api_base) and "longcat" in api_base.lower()
+
+        # Track if using custom endpoint (vLLM, etc.) - excludes OpenRouter and Longcat
+        self.is_vllm = bool(api_base) and not self.is_openrouter and not self.is_longcat
+
+        # Create OpenAI client for OpenAI-compatible endpoints (longcat, vLLM)
+        if self.is_longcat or self.is_vllm:
+            self._openai_client = openai.AsyncOpenAI(
+                api_key=api_key or "not-needed",
+                base_url=api_base
+            )
+        else:
+            self._openai_client = None
+
         # Configure LiteLLM based on provider
         if api_key:
             if self.is_openrouter:
                 # OpenRouter mode - set key
                 os.environ["OPENROUTER_API_KEY"] = api_key
-            elif self.is_vllm:
-                # vLLM/custom endpoint - uses OpenAI-compatible API
-                os.environ["OPENAI_API_KEY"] = api_key
             elif "anthropic" in default_model:
                 os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
             elif "openai" in default_model or "gpt" in default_model:
@@ -53,10 +63,10 @@ class LiteLLMProvider(LLMProvider):
                 os.environ.setdefault("ZHIPUAI_API_KEY", api_key)
             elif "groq" in default_model:
                 os.environ.setdefault("GROQ_API_KEY", api_key)
-        
+
         if api_base:
             litellm.api_base = api_base
-        
+
         # Disable LiteLLM logging noise
         litellm.suppress_debug_info = True
     
@@ -86,7 +96,7 @@ class LiteLLMProvider(LLMProvider):
         # For OpenRouter, prefix model name if not already prefixed
         if self.is_openrouter and not model.startswith("openrouter/"):
             model = f"openrouter/{model}"
-        
+
         # For Zhipu/Z.ai, ensure prefix is present
         # Handle cases like "glm-4.7-flash" -> "zhipu/glm-4.7-flash"
         if ("glm" in model.lower() or "zhipu" in model.lower()) and not (
@@ -97,29 +107,49 @@ class LiteLLMProvider(LLMProvider):
             model = f"zhipu/{model}"
         
         # For vLLM, use hosted_vllm/ prefix per LiteLLM docs
-        # Convert openai/ prefix to hosted_vllm/ if user specified it
         if self.is_vllm:
             model = f"hosted_vllm/{model}"
-        
+
         # For Gemini, ensure gemini/ prefix if not already present
         if "gemini" in model.lower() and not model.startswith("gemini/"):
             model = f"gemini/{model}"
         
+        # Use direct OpenAI client for OpenAI-compatible endpoints (longcat, vLLM)
+        if self._openai_client:
+            try:
+                # Build request kwargs
+                create_kwargs = {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+                if tools:
+                    create_kwargs["tools"] = tools
+                    create_kwargs["tool_choice"] = "auto"
+
+                response = await self._openai_client.chat.completions.create(**create_kwargs)
+                return self._parse_openai_response(response)
+            except Exception as e:
+                return LLMResponse(
+                    content=f"Error calling LLM: {str(e)}",
+                    finish_reason="error",
+                )
+
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        
-        # Pass api_base directly for custom endpoints (vLLM, etc.)
+
         if self.api_base:
             kwargs["api_base"] = self.api_base
-        
+
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        
+
         try:
             response = await acompletion(**kwargs)
             return self._parse_response(response)
@@ -130,6 +160,43 @@ class LiteLLMProvider(LLMProvider):
                 finish_reason="error",
             )
     
+    def _parse_openai_response(self, response: Any) -> LLMResponse:
+        """Parse OpenAI API response into our standard format."""
+        choice = response.choices[0]
+        message = choice.message
+
+        tool_calls = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                args = tc.function.arguments
+                if isinstance(args, str):
+                    import json
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {"raw": args}
+
+                tool_calls.append(ToolCallRequest(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=args,
+                ))
+
+        usage = {}
+        if response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+
+        return LLMResponse(
+            content=message.content,
+            tool_calls=tool_calls,
+            finish_reason=choice.finish_reason or "stop",
+            usage=usage,
+        )
+
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""
         choice = response.choices[0]

@@ -1,4 +1,4 @@
-.assets
+.idea
 .env
 *.pyc
 dist/
@@ -13,3 +13,4 @@ docs/
 *.pyz
 *.pywz
 *.pyzz
+/.idea/misc.xml
