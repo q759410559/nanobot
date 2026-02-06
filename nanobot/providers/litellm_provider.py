@@ -65,7 +65,10 @@ class LiteLLMProvider(LLMProvider):
                 os.environ.setdefault("ZHIPUAI_API_KEY", api_key)
             elif "groq" in default_model:
                 os.environ.setdefault("GROQ_API_KEY", api_key)
-
+            elif "moonshot" in default_model or "kimi" in default_model:
+                os.environ.setdefault("MOONSHOT_API_KEY", api_key)
+                os.environ.setdefault("MOONSHOT_API_BASE", api_base or "https://api.moonshot.cn/v1")
+        
         if api_base:
             litellm.api_base = api_base
 
@@ -107,15 +110,31 @@ class LiteLLMProvider(LLMProvider):
             model.startswith("openrouter/")
         ):
             model = f"zai/{model}"
-        
-        # For vLLM, use hosted_vllm/ prefix per LiteLLM docs
-        if self.is_vllm:
-            model = f"hosted_vllm/{model}"
+
+        # For Moonshot/Kimi, ensure moonshot/ prefix (before vLLM check)
+        if ("moonshot" in model.lower() or "kimi" in model.lower()) and not (
+            model.startswith("moonshot/") or model.startswith("openrouter/")
+        ):
+            model = f"moonshot/{model}"
 
         # For Gemini, ensure gemini/ prefix if not already present
         if "gemini" in model.lower() and not model.startswith("gemini/"):
             model = f"gemini/{model}"
-        
+
+        # For vLLM, use hosted_vllm/ prefix per LiteLLM docs
+        if self.is_vllm:
+            model = f"hosted_vllm/{model}"
+
+        # For longcat, remove any provider prefix and use raw model name
+        if self.is_longcat:
+            # Remove openai/ prefix if present
+            if model.startswith("openai/"):
+                model = model[7:]
+
+        # kimi-k2.5 only supports temperature=1.0
+        if "kimi-k2.5" in model.lower():
+            temperature = 1.0
+
         # Use direct OpenAI client for OpenAI-compatible endpoints (longcat, vLLM)
         if self._openai_client:
             try:
