@@ -13,4 +13,6 @@ docs/
 *.pyz
 *.pywz
 *.pyzz
+.venv/
+__pycache__/
 /.idea/misc.xml
