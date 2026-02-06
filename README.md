@@ -359,6 +359,7 @@ Config file: `~/.nanobot/config.json`
 | `deepseek` | LLM (DeepSeek direct) | [platform.deepseek.com](https://platform.deepseek.com) |
 | `groq` | LLM + **Voice transcription** (Whisper) | [console.groq.com](https://console.groq.com) |
 | `gemini` | LLM (Gemini direct) | [aistudio.google.com](https://aistudio.google.com) |
+| `longcat` | LLM (LongCat - 自定义 API) | https://api.longcat.chat/openai |
 
 
 ### Security
