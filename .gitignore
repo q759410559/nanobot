@@ -19,3 +19,9 @@ __pycache__/
 /.idea/misc.xml
 poetry.lock
 .pytest_cache/
+/.codebuddy
+/task_plan.md
+/findings.md
+/progress.md
+/setup_venv310.bat
+/setup_venv312.bat
